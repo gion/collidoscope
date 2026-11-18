@@ -769,7 +769,20 @@ async function initMidi() {
   } catch (e) { midiNames = ['MIDI blocked: ' + e.message]; }
 }
 const ccPrev = {};
+// Only the Collidoscope tab you used last reacts to the controller. Web MIDI reaches every open tab,
+// so without this an old tab in the background would also play when you press keys or ⏵.
+const tabId = Math.random().toString(36).slice(2);
+let midiActive = true;
+const midiBC = 'BroadcastChannel' in window ? new BroadcastChannel('collidoscope-midi') : null;
+function claimMidi() { if (!midiActive || midiBC) { midiActive = true; midiBC && midiBC.postMessage(tabId); } }
+if (midiBC) midiBC.onmessage = e => { if (e.data !== tabId && midiActive) { midiActive = false; lastMsg = 'controller handed to another Collidoscope tab — click here to take it back'; } };
+addEventListener('focus', claimMidi);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) claimMidi(); });
+addEventListener('pointerdown', claimMidi, true);
+addEventListener('keydown', claimMidi, true);
+claimMidi();
 function onMidi(e) {
+  if (!midiActive) return;
   const s = e.data[0];
   if (s >= 0xF0) {
     if (s === 0xF8) onClock(e);
@@ -1002,7 +1015,7 @@ function hud() {
   const grains = tracks.reduce((a, x) => a + x.viz.g.length / 2, 0);
   $('hud').innerHTML =
     `<b>COLLIDOSCOPE</b> · song\n` +
-    `midi   <b>${midiNames.length ? midiNames.join(', ') : 'no device'}</b>\n` +
+    `midi   <b>${midiNames.length ? (midiActive ? '' : '⏸ other tab · ') + midiNames.join(', ') : 'no device'}</b>\n` +
     `last   <b>${lastMsg}</b>\n` +
     `track  <span class="a">T${cur + 1}</span>  sample <b>${len}</b>  root <b>${noteName(t.P.root)}</b>   knobs <span class="a">page ${page + 1} · ${PAGES[page]}</span>   scene <b>${curSlot != null ? curSlot + 1 : '—'}</b>\n` +
     `tempo  <b>${G.bpm.toFixed(1)} bpm</b> (${tempoSrc})  sync <b>${sync ? 'ON' : 'off'}</b>  hold <b>${hold ? 'ON' : 'off'}</b>  oct <b>${octave >= 0 ? '+' : ''}${octave / 12}</b>  grains <b>${grains}</b>  latency <b>${ctx ? lat.toFixed(1) + 'ms' : '—'}</b>` +

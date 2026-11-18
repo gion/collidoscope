@@ -731,7 +731,20 @@ async function initMidi() {
   catch (e) { midiNames = ['MIDI blocked: ' + e.message]; }
 }
 const ccPrev = {};
+// Only the Collidoscope tab you used last reacts to the controller. Web MIDI reaches every open tab,
+// so without this an old tab in the background would also play when you press keys or ⏵.
+const tabId = Math.random().toString(36).slice(2);
+let midiActive = true;
+const midiBC = 'BroadcastChannel' in window ? new BroadcastChannel('collidoscope-midi') : null;
+function claimMidi() { if (!midiActive || midiBC) { midiActive = true; midiBC && midiBC.postMessage(tabId); } }
+if (midiBC) midiBC.onmessage = e => { if (e.data !== tabId && midiActive) { midiActive = false; lastMsg = 'controller handed to another Collidoscope tab — click here to take it back'; } };
+addEventListener('focus', claimMidi);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) claimMidi(); });
+addEventListener('pointerdown', claimMidi, true);
+addEventListener('keydown', claimMidi, true);
+claimMidi();
 function onMidi(e) {
+  if (!midiActive) return;
   const s = e.data[0]; if (s >= 0xF0) return;
   const d1 = e.data[1], d2 = e.data[2] || 0, t = s & 0xf0, ch = (s & 15) + 1;
   if (t === 0x90 && d2 > 0 && ch !== 10) liveOn(d1, d2 / 127);
@@ -913,7 +926,7 @@ function frame() {
 let hudT = 0;
 function hud() {
   const now = performance.now(); if (now - hudT < 120) return; hudT = now;
-  $('hud').innerHTML = `<b>COLLIDOSCOPE</b> · studio   midi <b>${midiNames.join(', ') || 'no device'}</b>\n` +
+  $('hud').innerHTML = `<b>COLLIDOSCOPE</b> · studio   midi <b>${(midiActive ? '' : '⏸ other tab · ') + midiNames.join(', ') || 'no device'}</b>\n` +
     `<b>${lastMsg}</b>` + (recording ? `\n<span class="r">● REC → ${tracks[recTrack].name} ${(ctx.currentTime - recT0).toFixed(1)}s</span>` : '') +
     (exporting ? `\n<span class="r">● EXPORTING ${Math.round(posBars)}/${totalBars()} bars</span>` : '');
 }
