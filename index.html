@@ -355,15 +355,25 @@ function setPage(n) {
   lockAll(); updateAll();
   lastMsg = `knob page ${page + 1}: ${PAGES[page]}`;
 }
+// Value scaling (catch-up): when the physical knob and the value disagree, the value moves
+// in the same direction as the knob, scaled so both reach the end of travel together.
+// Once they meet, the knob controls the value directly. No dead zone, no jumps.
 function knob(slot, value127) {
   const p = PARAMS.find(q => q.page === page && q.slot === slot); if (!p) return;
-  const norm = value127 / 127, target = toNorm(p, P[p.id]), t = takeover[slot];
-  if (t.locked) {
-    const crossed = (t.last != null && (t.last - target) * (norm - target) <= 0) || Math.abs(norm - target) < 0.03;
-    if (!crossed) { t.last = norm; t.ghost = norm; updateUI(p.id); return; }
-    t.locked = false; t.ghost = null;
+  const norm = value127 / 127, t = takeover[slot];
+  if (!t.locked) { setParam(p.id, fromNorm(p, norm)); return; }
+  if (t.last == null) t.val = toNorm(p, P[p.id]);                 // first touch after page/preset switch
+  if (Math.abs(norm - t.val) < 0.02) {                            // already aligned → take over
+    t.locked = false; t.ghost = null; setParam(p.id, fromNorm(p, norm)); return;
   }
-  setParam(p.id, fromNorm(p, norm));
+  if (t.last != null) {
+    if (norm > t.last && t.last < 1) t.val += (norm - t.last) * (1 - t.val) / (1 - t.last);
+    else if (norm < t.last && t.last > 0) t.val -= (t.last - norm) * t.val / t.last;
+    t.val = Math.min(1, Math.max(0, t.val));
+  }
+  t.last = norm; t.ghost = norm;
+  if (Math.abs(norm - t.val) < 0.02) { t.locked = false; t.ghost = null; t.val = norm; }
+  setParam(p.id, fromNorm(p, t.val));
 }
 
 // ---------- presets ----------
