@@ -57,6 +57,7 @@ Axiom: ▲▼ knob page · ● tap · ⏺ rec · ⏵ play original · ⏹ panic 
     <button id="bDemo">Demo</button>
     <button id="bLoad">Load file…</button>
     <button id="bRec" class="rec">● Rec</button>
+    <button id="bMuteRec" title="silence the speakers while recording, so the mic does not record the app itself (turn off if you use headphones)">🔇 while rec</button>
     <select id="selIn"><option value="">default input</option></select>
     <button id="bDetect" title="detect pitch of the selected region and set Root">Detect root</button>
     <div class="sep"></div>
@@ -590,7 +591,7 @@ async function startRec() {
     ctx.createMediaStreamSource(stream).connect(recNode);
     listInputs();
   }
-  recChunks = []; recPeaks = []; recT0 = ctx.currentTime; recording = true;
+  recChunks = []; recPeaks = []; recT0 = ctx.currentTime; recording = true; recMute(true);
   recNode.port.postMessage(true); $('bRec').classList.add('on');
 }
 function onRecChunk(c) {
@@ -602,12 +603,18 @@ function onRecChunk(c) {
 }
 function stopRec() {
   if (!recording) return;
-  recording = false; recNode.port.postMessage(false); $('bRec').classList.remove('on');
+  recording = false; recNode.port.postMessage(false); $('bRec').classList.remove('on'); recMute(false);
   const n = recChunks.reduce((a, c) => a + c.length, 0);
   if (n < ctx.sampleRate * 0.05) { lastMsg = 'recording too short'; return; }
   const d = new Float32Array(n); let o = 0; for (const c of recChunks) { d.set(c, o); o += c.length; }
   setSample(normalize(d)); lastMsg = `recorded ${(n / ctx.sampleRate).toFixed(1)}s`;
 }
+// silence the output while recording so the mic doesn't pick up the app through the speakers
+let muteRec = (() => { try { return localStorage.getItem('collidoscope.muteRec') !== '0'; } catch (e) { return true; } })();
+function renderMuteRec() { const b = document.getElementById('bMuteRec'); if (b) b.classList.toggle('on', muteRec); }
+function recMute(on) { if (!ctx || !fx.master) return; fx.master.gain.cancelScheduledValues(ctx.currentTime); fx.master.gain.setTargetAtTime(on && muteRec ? 0 : P.out, ctx.currentTime, on ? 0.015 : 0.05); }
+document.getElementById('bMuteRec').onclick = () => { muteRec = !muteRec; try { localStorage.setItem('collidoscope.muteRec', muteRec ? '1' : '0'); } catch (e) { } renderMuteRec(); if (recording) recMute(true); };
+renderMuteRec();
 const toggleRec = () => recording ? stopRec() : startRec().catch(e => { lastMsg = 'mic error: ' + e.message; });
 
 // ---------- notes ----------

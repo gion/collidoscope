@@ -94,6 +94,7 @@ keys A W S E D … play live on top · Axiom: ⏵ play · ⏹ stop · ⏺ rec ·
   <div class="row">
     <button class="tbtn">PAD</button><button class="tbtn">LEAD</button>
     <button id="bRec" class="rec">● Rec</button>
+    <button id="bMuteRec" title="silence the speakers while recording, so the mic does not record the app itself (turn off if you use headphones)">🔇 while rec</button>
     <select id="selIn"><option value="">default input</option></select>
     <button id="bLoad">Load file…</button>
     <button id="bDetect" title="detect the pitch of the selected region so the sound plays in key">Detect root</button>
@@ -698,7 +699,7 @@ async function startRec() {
     stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: dev ? { exact: dev } : undefined, echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
     streamDev = dev; ctx.createMediaStreamSource(stream).connect(recNode); listInputs();
   }
-  recTrack = cur; recChunks = []; recPeaks = []; recT0 = ctx.currentTime; recording = true; recNode.port.postMessage(true); $('bRec').classList.add('on');
+  recTrack = cur; recChunks = []; recPeaks = []; recT0 = ctx.currentTime; recording = true; recNode.port.postMessage(true); $('bRec').classList.add('on'); recMute(true);
 }
 function onRecChunk(c) {
   if (!recording) return; recChunks.push(c);
@@ -706,12 +707,18 @@ function onRecChunk(c) {
   if (ctx.currentTime - recT0 > MAX_REC) stopRec();
 }
 function stopRec() {
-  if (!recording) return; recording = false; recNode.port.postMessage(false); $('bRec').classList.remove('on');
+  if (!recording) return; recording = false; recNode.port.postMessage(false); $('bRec').classList.remove('on'); recMute(false);
   const n = recChunks.reduce((a, c) => a + c.length, 0); if (n < ctx.sampleRate * 0.05) { lastMsg = 'recording too short'; return; }
   const d = new Float32Array(n); let o = 0; for (const c of recChunks) { d.set(c, o); o += c.length; }
   setSample(tracks[recTrack], normalize(d)); T().P.start = 0.1; T().P.len = 0.1; pushP(T()); updAllKP();
   lastMsg = `${tracks[recTrack].name}: recorded ${(n / ctx.sampleRate).toFixed(1)}s — select a steady part, then Detect root`;
 }
+// silence the output while recording so the mic doesn't pick up the app through the speakers
+let muteRec = (() => { try { return localStorage.getItem('collidoscope.muteRec') !== '0'; } catch (e) { return true; } })();
+function renderMuteRec() { const b = document.getElementById('bMuteRec'); if (b) b.classList.toggle('on', muteRec); }
+function recMute(on) { if (!ctx || !master) return; master.gain.cancelScheduledValues(ctx.currentTime); master.gain.setTargetAtTime(on && muteRec ? 0 : +$('mxMaster').value, ctx.currentTime, on ? 0.015 : 0.05); }
+document.getElementById('bMuteRec').onclick = () => { muteRec = !muteRec; try { localStorage.setItem('collidoscope.muteRec', muteRec ? '1' : '0'); } catch (e) { } renderMuteRec(); if (recording) recMute(true); };
+renderMuteRec();
 const toggleRec = () => recording ? stopRec() : startRec().catch(e => { lastMsg = 'mic error: ' + e.message; });
 
 // ---------- live play on top (keys / Axiom) ----------
