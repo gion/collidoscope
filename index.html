@@ -48,7 +48,8 @@
 keys: A W S E D F T G Y H U J K O L P ; = notes · Z/X octave
 R record · SPACE hold · ESC panic · B tap tempo · N sync on/off
 1–8 load preset · SHIFT+1–8 save · 0 reset · [ ] knob page · H hide · F fullscreen
-Axiom: ▲▼ knob page · ● tap · ⏺ rec · ⏵ hold · ⏹ panic · pad = preset · ⏹ held + pad = save</div>
+ENTER play original pitch
+Axiom: ▲▼ knob page · ● tap · ⏺ rec · ⏵ play original · ⏹ panic · pedal = hold · pad = preset · ⏹ held + pad = save</div>
 
 <div id="panel">
   <div id="groups" style="display:flex;flex-direction:column;gap:6px"></div>
@@ -61,6 +62,7 @@ Axiom: ▲▼ knob page · ● tap · ⏺ rec · ⏵ hold · ⏹ panic · pad = 
     <div class="sep"></div>
     <button id="bSync">Sync</button>
     <button id="bTap">Tap</button>
+    <button id="bPlay" title="play the selection at its original pitch, latched (Axiom ⏵ / Enter)">▶ Play</button>
     <button id="bHold">Hold</button>
     <button id="bPanic">Panic</button>
     <div class="sep"></div>
@@ -113,7 +115,7 @@ class Granular extends AudioWorkletProcessor {
     if (this.grains.length >= this.maxGrains || !this.len) return;
     const p = this.p, rl = Math.max(2, p.len * this.len), rs = p.start * this.len;
     let r = v.ph + (Math.random() - 0.5) * p.spread; r -= Math.floor(r);
-    let rate = Math.pow(2, (v.note - p.root) / 12 + p.jitter * (Math.random() * 2 - 1) / 12);
+    let rate = Math.pow(2, (v.note < 0 ? 0 : (v.note - p.root) / 12) + p.jitter * (Math.random() * 2 - 1) / 12);
     if (Math.random() < p.reverse) rate = -rate;
     const a = ((Math.random() - 0.5) * 2 * p.width + 1) * Math.PI / 4;
     this.grains.push({ pos: rs + r * rl, rate, age: -offset, dur: Math.max(32, Math.round(p.size * sampleRate)),
@@ -615,7 +617,16 @@ function setHold(b) {
   hold = b; $('bHold').classList.toggle('on', b);
   if (!b) { for (const n of held) if (!down.has(n)) send({ type: 'off', note: n }); held.clear(); }
 }
-function panic() { down.clear(); held.clear(); setHold(false); send({ type: 'panic' }); }
+function panic() { down.clear(); held.clear(); setHold(false); setPlaying(false, true); send({ type: 'panic' }); }
+// ▶ Play: one latched voice at the sample's original pitch (independent of Root), and hold switched on
+let playing = false;
+function setPlaying(b, quiet) {
+  if (!ctx || b === playing) return;
+  playing = b; $('bPlay').classList.toggle('on', b);
+  if (b) { setHold(true); send({ type: 'on', note: -1, vel: 0.9 }); }
+  else if (!quiet) { send({ type: 'off', note: -1 }); setHold(false); }
+}
+const togglePlay = () => setPlaying(!playing);
 
 // ---------- MIDI ----------
 async function initMidi() {
@@ -650,7 +661,7 @@ function onMidi(e) {
     else if (d1 === 64) { if (rising) setHold(!hold); }                 // sustain pedal = hold toggle
     else if (d1 === 16) { stopHeld = d2 >= 64; if (rising) panic(); }     // ⏹ (also "shift" while held)
     else if (rising) switch (d1) {
-      case 17: setHold(!hold); break;                            // ⏵ hold/latch
+      case 17: togglePlay(); break;                              // ⏵ play original pitch (latched)
       case 18: toggleRec(); break;                               // ⏺ record
       case 19: setPage(page - 1); break;                         // ▲ knob page above (row up)
       case 20: setPage(page + 1); break;                         // ▼ knob page below (row down)
@@ -683,6 +694,7 @@ addEventListener('keydown', async e => {
     case ']': setPage(page + 1); break;
     case ' ': e.preventDefault(); setHold(!hold); break;
     case 'escape': panic(); break;
+    case 'enter': togglePlay(); break;
     case 'h': $('panel').classList.toggle('hidden'); $('help').classList.toggle('hidden'); break;
     case 'f': toggleFull(); break;
   }
@@ -699,11 +711,12 @@ $('bDetect').onclick = detectRoot;
 $('bSync').onclick = () => setSync(!sync);
 $('bTap').onclick = tap;
 $('bHold').onclick = () => setHold(!hold);
+$('bPlay').onclick = togglePlay;
 $('bPanic').onclick = panic;
 $('bReset').onclick = resetAll;
 $('bFull').onclick = toggleFull;
 $('selIn').onchange = () => { if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; } };
-document.querySelectorAll('button,select').forEach(b => b.addEventListener('keydown', e => { if (e.key === ' ') e.preventDefault(); }));
+document.querySelectorAll('button,select').forEach(b => b.addEventListener('keydown', e => { if (e.key === ' ' || e.key === 'Enter') e.preventDefault(); }));
 addEventListener('dragover', e => { e.preventDefault(); $('dropmsg').classList.remove('hidden'); });
 addEventListener('dragleave', () => $('dropmsg').classList.add('hidden'));
 addEventListener('drop', e => { e.preventDefault(); $('dropmsg').classList.add('hidden'); const f = e.dataTransfer.files[0]; if (f) loadFile(f); });
@@ -813,7 +826,7 @@ function hud() {
     `last   <b>${lastMsg}</b>\n` +
     `knobs  <span class="a">page ${page + 1} · ${PAGES[page]}</span>   preset <b>${curSlot != null ? curSlot + 1 : '—'}</b>\n` +
     `sample <b>${len}</b>  root <b>${noteName(P.root)}</b>  grains <b>${viz.g.length / 2}</b>  voices <b>${viz.v.length / 2}</b>\n` +
-    `tempo  <b>${P.bpm.toFixed(1)} bpm</b> (${tempoSrc})  sync <b>${sync ? 'ON' : 'off'}</b>  hold <b>${hold ? 'ON' : 'off'}</b>  oct <b>${octave >= 0 ? '+' : ''}${octave / 12}</b>  latency <b>${ctx ? lat.toFixed(1) + 'ms' : '—'}</b>` +
+    `tempo  <b>${P.bpm.toFixed(1)} bpm</b> (${tempoSrc})  sync <b>${sync ? 'ON' : 'off'}</b>  hold <b>${hold ? 'ON' : 'off'}</b>  play <b>${playing ? 'ON' : 'off'}</b>  oct <b>${octave >= 0 ? '+' : ''}${octave / 12}</b>  latency <b>${ctx ? lat.toFixed(1) + 'ms' : '—'}</b>` +
     (recording ? `\n<span class="r">● REC ${(ctx.currentTime - recT0).toFixed(1)}s / ${MAX_REC}s</span>` : '');
 }
 setPage(0); renderSlots(); frame();
