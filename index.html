@@ -637,13 +637,13 @@ function onMidi(e) {
     lastMsg = `CC ${d1}=${d2} ch${ch}`;
     const rising = d2 >= 64 && !(ccPrev[d1] >= 64); ccPrev[d1] = d2;
     if (d1 >= 1 && d1 <= 8) knob(d1 - 1, d2);
-    else if (d1 === 64) setHold(d2 >= 64);
+    else if (d1 === 64) { if (rising) setHold(!hold); }                 // sustain pedal = hold toggle
     else if (d1 === 16) { stopHeld = d2 >= 64; if (rising) panic(); }     // ⏹ (also "shift" while held)
     else if (rising) switch (d1) {
       case 17: setHold(!hold); break;                            // ⏵ hold/latch
       case 18: toggleRec(); break;                               // ⏺ record
-      case 19: setPage(page + 1); break;                         // ▲ next knob page
-      case 20: setPage(page - 1); break;                         // ▼ prev knob page
+      case 19: setPage(page - 1); break;                         // ▲ knob page above (row up)
+      case 20: setPage(page + 1); break;                         // ▼ knob page below (row down)
       case 21: setParam('start', P.start + P.len * 0.25); lockSlotOf('start'); break;   // ▶
       case 22: setParam('start', P.start - P.len * 0.25); lockSlotOf('start'); break;   // ◀
       case 23: tap(); break;                                     // ● tap tempo
