@@ -51,7 +51,7 @@
 <div id="hud"></div>
 <div id="help">click a lane = select track · drag = select region · drag inside = move · edges = resize
 keys: A W S E D F T G Y H U J K O L P ; = notes · Z/X octave · TAB / SHIFT+TAB = next / prev track
-R record (into current track) · ENTER play current track · SPACE hold · ESC panic (all tracks)
+C cut track to selection · BACKSPACE undo cut · R record (into current track) · ENTER play current track · SPACE hold · ESC panic (all tracks)
 B tap · N sync · 1–8 load scene · SHIFT+1–8 save · 0 reset track · [ ] knob page · H hide · F fullscreen
 Axiom: ◀ ▶ track · ▲▼ knob page · ⏵ play track · ⏺ rec · ⏹ panic all · ● tap · pad = scene · pedal = hold
 <i>italic</i> controls are shared by all tracks, the rest are per track</div>
@@ -67,6 +67,8 @@ Axiom: ◀ ▶ track · ▲▼ knob page · ⏵ play track · ⏺ rec · ⏹ pan
     <button id="bRec" class="rec">● Rec</button>
     <select id="selIn"><option value="">default input</option></select>
     <button id="bDetect" title="detect pitch of the selected region and set Root">Detect root</button>
+    <button id="bCut" title="keep only the selected region as the track's sample (C)">✂ Cut</button>
+    <button id="bUndo" title="undo the last cut on this track (Backspace)">Undo cut</button>
     <div class="sep"></div>
     <button id="bSync">Sync</button>
     <button id="bTap">Tap</button>
@@ -382,7 +384,7 @@ function setTrack(i) {
   i = ((i % NT) + NT) % NT;
   if (i === cur) return;
   if (bend) { bend = 0; pushParams(T()); }
-  cur = i; lockAll(); updateAll(); renderTrackUI();
+  cur = i; setPage(0); renderTrackUI();
   lastMsg = `track ${cur + 1}` + (T().sample ? '' : ' (empty — R to record, or drop a file on its lane)');
 }
 
@@ -445,6 +447,26 @@ function savePreset(i) {
 function loadPreset(i) {
   if (!presets[i]) { lastMsg = `scene ${i + 1} is empty (shift+click / ⏹+pad to save)`; return; }
   applyScene(presets[i]); curSlot = i; lastMsg = `scene ${i + 1}`; renderSlots();
+}
+// ✂ Cut: the selected region becomes the whole sample of the current track (undo keeps up to 5 steps)
+function cutToSelection() {
+  const t = T(); if (!t.sample || !ctx) return;
+  const n = t.sample.length, a = Math.floor(t.P.start * n), b = Math.min(n, Math.ceil((t.P.start + t.P.len) * n));
+  if (b - a < ctx.sampleRate * 0.02) { lastMsg = 'selection too short to cut'; return; }
+  if (a === 0 && b === n) { lastMsg = 'selection is already the whole sample'; return; }
+  t.undo = (t.undo || []).slice(-4); t.undo.push({ sample: t.sample, start: t.P.start, len: t.P.len });
+  const d = t.sample.slice(a, b), fade = Math.min(Math.floor(ctx.sampleRate * 0.005), d.length >> 2);
+  for (let i = 0; i < fade; i++) { const k = i / fade; d[i] *= k; d[d.length - 1 - i] *= k; }   // 5 ms fades, no clicks
+  t.P.start = 0; t.P.len = 1;
+  setSample(t, d); pushParams(t); lockSlotOf('start'); lockSlotOf('len'); updateUI('start'); updateUI('len');
+  lastMsg = `T${cur + 1}: cut to ${(d.length / ctx.sampleRate).toFixed(2)}s`;
+}
+function undoCut() {
+  const t = T(), u = t.undo && t.undo.pop();
+  if (!u) { lastMsg = 'nothing to undo'; return; }
+  t.P.start = u.start; t.P.len = u.len;
+  setSample(t, u.sample); pushParams(t); lockSlotOf('start'); lockSlotOf('len'); updateUI('start'); updateUI('len');
+  lastMsg = `T${cur + 1}: cut undone`;
 }
 function resetTrack() {   // resets the current track's settings only
   Object.assign(T().P, TDEF); PARAMS.forEach(p => applyFx(p.id, T()));
@@ -774,6 +796,8 @@ addEventListener('keydown', async e => {
     case ' ': e.preventDefault(); setHold(!hold); break;
     case 'escape': panic(); break;
     case 'enter': togglePlay(); break;
+    case 'c': cutToSelection(); break;
+    case 'backspace': undoCut(); break;
     case 'h': $('panel').classList.toggle('hidden'); $('help').classList.toggle('hidden'); break;
     case 'f': toggleFull(); break;
   }
@@ -793,6 +817,8 @@ $('bPlay').onclick = togglePlay;
 $('bHold').onclick = () => setHold(!hold);
 $('bPanic').onclick = panic;
 $('bReset').onclick = resetTrack;
+$('bCut').onclick = cutToSelection;
+$('bUndo').onclick = undoCut;
 $('bLearn').onclick = () => { learning = !learning; renderTrackUI(); };
 $('bFull').onclick = toggleFull;
 $('selIn').onchange = () => { if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; } };
