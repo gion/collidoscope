@@ -1,0 +1,944 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Collidoscope · multitrack</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root{--bg:#07080c;--fg:#d8dce6;--dim:#6b7280;--acc:#ffb84d;--acc2:#4dd2ff;--rec:#ff4d5e}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;user-select:none}
+  canvas{position:fixed;inset:0;width:100vw;height:100vh;display:block;cursor:crosshair}
+  #hud{position:fixed;top:12px;left:16px;pointer-events:none;white-space:pre;color:var(--dim)}
+  #hud b{color:var(--fg);font-weight:normal}
+  #hud .r{color:var(--rec)} #hud .a{color:var(--acc)}
+  #help{position:fixed;top:12px;right:16px;pointer-events:none;white-space:pre;color:var(--dim);text-align:right;font-size:11px}
+  #panel{position:fixed;left:0;right:0;bottom:0;padding:28px 16px 12px;background:linear-gradient(transparent,rgba(7,8,12,.95) 22%);display:flex;flex-direction:column;gap:8px}
+  .hidden{display:none!important}
+  .row{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:flex-end}
+  .group{display:flex;gap:12px;align-items:flex-end;padding:4px 8px;border-left:2px solid #1d2230}
+  .group.active{border-left-color:var(--acc)}
+  .gt{width:62px;color:var(--dim);font-size:11px;cursor:pointer;align-self:center}
+  .group.active .gt{color:var(--acc)}
+  .ctl{display:flex;flex-direction:column;width:122px}
+  .ctl label{display:flex;justify-content:space-between;gap:4px;color:var(--dim);font-size:11px;white-space:nowrap}
+  .ctl label .v{color:var(--fg)}
+  .ctl label i{color:var(--acc2);font-style:normal}
+  .ctl.locked label .v{color:var(--acc)}
+  input[type=range]{width:100%;accent-color:var(--acc);margin:3px 0 0}
+  button,select{background:#151821;color:var(--fg);border:1px solid #2a2f3d;border-radius:6px;padding:5px 9px;font:inherit;cursor:pointer}
+  select{max-width:200px}
+  button:hover{border-color:var(--acc)}
+  button.on{background:var(--acc);color:#000;border-color:var(--acc)}
+  button.rec.on{background:var(--rec);border-color:var(--rec);color:#fff}
+  button.slot{width:34px;padding:5px 0;color:var(--dim)}
+  button.slot.full{color:var(--fg);border-color:#4a5368}
+  button.slot.cur{background:var(--acc2);color:#000;border-color:var(--acc2)}
+  .sep{width:1px;height:24px;background:#2a2f3d}
+  #start{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;background:rgba(7,8,12,.96);z-index:10;cursor:pointer;text-align:center}
+  #start h1{margin:0;font-size:30px;letter-spacing:.35em;color:var(--acc);font-weight:normal}
+  #start p{margin:0;color:var(--dim)}
+  #dropmsg{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;font-size:22px;color:var(--acc);background:rgba(7,8,12,.8);border:3px dashed var(--acc);pointer-events:none;z-index:5}
+  .ctl.glob label span:first-child{font-style:italic}
+  .tbtn{min-width:44px;border-color:#2a2f3d;color:var(--tc)}
+  .tbtn.on{background:var(--tc);color:#000;border-color:var(--tc)}
+  .tbtn.play::after{content:' ▶'}
+  a.sw{color:var(--dim);font-size:11px;text-decoration:none;border-bottom:1px dotted var(--dim)}
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div id="hud"></div>
+<div id="help">click a lane = select track · drag = select region · drag inside = move · edges = resize
+keys: A W S E D F T G Y H U J K O L P ; = notes · Z/X octave · TAB / SHIFT+TAB = next / prev track
+R record (into current track) · ENTER play current track · SPACE hold · ESC panic (all tracks)
+B tap · N sync · 1–8 load scene · SHIFT+1–8 save · 0 reset track · [ ] knob page · H hide · F fullscreen
+Axiom: ◀ ▶ track · ▲▼ knob page · ⏵ play track · ⏺ rec · ⏹ panic all · ● tap · pad = scene · pedal = hold
+<i>italic</i> controls are shared by all tracks, the rest are per track</div>
+
+<div id="panel">
+  <div class="row"><span style="color:var(--dim);font-size:11px">track</span><span id="tracksel" style="display:flex;gap:4px"></span>
+    <button id="bLearn" title="assign any controller button (e.g. EDIT) to switch tracks">Learn ⇄</button>
+    <div class="sep"></div><a class="sw" href="./">← single-track version</a></div>
+  <div id="groups" style="display:flex;flex-direction:column;gap:6px"></div>
+  <div class="row">
+    <button id="bDemo">Demo</button>
+    <button id="bLoad">Load file…</button>
+    <button id="bRec" class="rec">● Rec</button>
+    <select id="selIn"><option value="">default input</option></select>
+    <button id="bDetect" title="detect pitch of the selected region and set Root">Detect root</button>
+    <div class="sep"></div>
+    <button id="bSync">Sync</button>
+    <button id="bTap">Tap</button>
+    <button id="bPlay" title="play the current track's selection at its original pitch, latched">▶ Play</button>
+    <button id="bHold">Hold</button>
+    <button id="bPanic">Panic</button>
+    <div class="sep"></div>
+    <span style="color:var(--dim);font-size:11px">scenes</span>
+    <span id="slots" style="display:flex;gap:4px"></span>
+    <button id="bReset" title="reset the current track's settings">Reset track</button>
+    <div class="sep"></div>
+    <button id="bFull">Fullscreen</button>
+    <input id="file" type="file" accept="audio/*" class="hidden">
+  </div>
+</div>
+
+<div id="start"><h1>COLLIDOSCOPE</h1><p>multitrack · click or press any key to start audio</p><p style="font-size:11px">Chrome · Axiom on USB · output via Scarlett or wired headphones (not Bluetooth)</p></div>
+<div id="dropmsg" class="hidden">drop audio file on a lane</div>
+
+<script type="text/worklet" id="worklet-src">
+const WIN = 2048;
+const HANN = new Float32Array(WIN);
+for (let i = 0; i < WIN; i++) HANN[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (WIN - 1));
+
+class Granular extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.buf = null; this.len = 0;
+    this.p = { start: 0.3, len: 0.15, size: 0.08, density: 25, speed: 1, spread: 0.02, release: 0.8, gain: 0.7,
+               attack: 0.02, jitter: 0, reverse: 0, width: 0.5, root: 60, bend: 0,
+               sync: false, period: 0, loop: 0, origin: 0 };
+    this.voices = []; this.grains = []; this.maxGrains = 240; this.blocks = 0;
+    this.port.onmessage = e => this.onMsg(e.data);
+  }
+  onMsg(m) {
+    switch (m.type) {
+      case 'buffer':
+        this.buf = m.data; this.len = m.data.length; this.grains.length = 0;
+        for (const v of this.voices) v.ph = 0;
+        break;
+      case 'param': Object.assign(this.p, m.values); break;
+      case 'on': {
+        let v = this.voices.find(v => v.note === m.note && v.state !== 'r');
+        if (!v) { v = { note: m.note, env: 0, env0: 0, env1: 0, next: 0, ph: 0 }; this.voices.push(v); }
+        v.vel = m.vel; v.state = 'a';
+        break;
+      }
+      case 'off': for (const v of this.voices) if (v.note === m.note && v.state !== 'r') v.state = 'r'; break;
+      case 'panic': for (const v of this.voices) v.state = 'r'; break;
+    }
+  }
+  spawn(v, offset) {
+    if (this.grains.length >= this.maxGrains || !this.len) return;
+    const p = this.p, rl = Math.max(2, p.len * this.len), rs = p.start * this.len;
+    let r = v.ph + (Math.random() - 0.5) * p.spread; r -= Math.floor(r);
+    let rate = Math.pow(2, (v.note < 0 ? 0 : (v.note - p.root) / 12) + p.jitter * (Math.random() * 2 - 1) / 12);
+    if (Math.random() < p.reverse) rate = -rate;
+    const a = ((Math.random() - 0.5) * 2 * p.width + 1) * Math.PI / 4;
+    this.grains.push({ pos: rs + r * rl, rate, age: -offset, dur: Math.max(32, Math.round(p.size * sampleRate)),
+                       v, amp: v.vel, l: Math.cos(a), r: Math.sin(a), w: 0 });
+  }
+  process(_inputs, outputs) {
+    const out = outputs[0], L = out[0], R = out[1] || out[0], n = L.length;
+    const p = this.p, buf = this.buf, len = this.len, sr = sampleRate;
+    if (!buf) { this.report(); return true; }
+
+    const aInc = n / Math.max(1, p.attack * sr), rInc = n / Math.max(1, p.release * sr);
+    const rl = Math.max(2, p.len * len);
+    const synced = p.sync && p.period >= 16;
+    let gphase = 0;
+    if (p.sync && p.loop !== 0) {
+      gphase = ((currentFrame - p.origin) / Math.abs(p.loop)) % 1; if (gphase < 0) gphase += 1;
+      if (p.loop < 0) gphase = 1 - gphase;
+    }
+
+    for (const v of this.voices) {
+      v.env0 = v.env;
+      if (v.state === 'a') { v.env = Math.min(1, v.env + aInc); if (v.env >= 1) v.state = 's'; }
+      else if (v.state === 'r') v.env = Math.max(0, v.env - rInc);
+      v.env1 = v.env;
+      const active = v.env0 > 0.0005 || v.state !== 'r';
+      if (synced) {                                   // grains on the tempo grid
+        const rel = currentFrame - p.origin;
+        let t = Math.ceil(rel / p.period) * p.period - rel;
+        while (t < n) { if (active) this.spawn(v, Math.floor(t)); t += p.period; }
+      } else {
+        const period = sr / p.density;
+        if (v.next > period * 1.2) v.next = period * Math.random();
+        while (v.next < n) { if (active) this.spawn(v, Math.max(0, Math.floor(v.next))); v.next += period * (0.8 + 0.4 * Math.random()); }
+        v.next -= n;
+      }
+      if (p.sync) { if (p.loop !== 0) v.ph = gphase; }   // locked to the bar (loop 0 = freeze)
+      else { v.ph += p.speed * n / rl; v.ph -= Math.floor(v.ph); }
+    }
+
+    const bendF = Math.pow(2, p.bend / 12);
+    const norm = p.gain / Math.sqrt(Math.max(1, (synced ? sr / p.period : p.density) * p.size));
+    const gs = this.grains;
+    for (let gi = gs.length - 1; gi >= 0; gi--) {
+      const g = gs[gi], v = g.v, e0 = v.env0, de = (v.env1 - v.env0) / n;
+      const inc = g.rate * bendF, wk = (WIN - 1) / g.dur, k = g.amp * norm;
+      let pos = g.pos, age = g.age;
+      for (let i = 0; i < n; i++) {
+        if (age < 0) { age++; continue; }
+        if (age >= g.dur) break;
+        let s = 0;
+        if (pos >= 0 && pos < len - 1) { const ip = pos | 0, f = pos - ip; s = buf[ip] + (buf[ip + 1] - buf[ip]) * f; }
+        s *= HANN[(age * wk) | 0] * k * (e0 + de * i);
+        L[i] += s * g.l; R[i] += s * g.r;
+        pos += inc; age++;
+      }
+      g.pos = pos; g.age = age;
+      g.w = age > 0 && age < g.dur ? HANN[(age * wk) | 0] * v.env * g.amp : 0;
+      if (age >= g.dur) { gs[gi] = gs[gs.length - 1]; gs.pop(); }
+    }
+    for (let i = 0; i < n; i++) { L[i] = Math.tanh(L[i]); if (R !== L) R[i] = Math.tanh(R[i]); }
+
+    this.voices = this.voices.filter(v => !(v.state === 'r' && v.env <= 0));
+    this.report();
+    return true;
+  }
+  report() {
+    if (++this.blocks % 4) return;
+    const gs = this.grains, len = this.len || 1;
+    const g = new Float32Array(gs.length * 2);
+    for (let i = 0; i < gs.length; i++) { g[i * 2] = gs[i].pos / len; g[i * 2 + 1] = gs[i].w; }
+    const v = new Float32Array(this.voices.length * 2), p = this.p;
+    for (let i = 0; i < this.voices.length; i++) { v[i * 2] = p.start + this.voices[i].ph * p.len; v[i * 2 + 1] = this.voices[i].env; }
+    this.port.postMessage({ type: 'viz', g, v }, [g.buffer, v.buffer]);
+  }
+}
+registerProcessor('granular', Granular);
+
+class Recorder extends AudioWorkletProcessor {
+  constructor() { super(); this.on = false; this.port.onmessage = e => { this.on = e.data; }; }
+  process(inputs) {
+    const ch = inputs[0];
+    if (this.on && ch && ch.length) {
+      const n = ch[0].length, out = new Float32Array(n);
+      for (let c = 0; c < ch.length; c++) for (let i = 0; i < n; i++) out[i] += ch[c][i] / ch.length;
+      this.port.postMessage(out, [out.buffer]);
+    }
+    return true;
+  }
+}
+registerProcessor('recorder', Recorder);
+</script>
+
+<script>
+'use strict';
+// ================= COLLIDOSCOPE · MULTITRACK =================
+const NT = 4;
+const TCOL = ['255,184,77', '77,210,255', '255,110,170', '120,230,140'];   // amber, cyan, pink, green
+
+// ---------- tempo tables ----------
+const DIVS  = [['1/1',0.25],['1/2',0.5],['1/4',1],['1/8',2],['1/8T',3],['1/16',4],['1/16T',6],['1/32',8],['1/64',16]];
+const LOOPS = [16, 8, 4, 2, 1];
+const DDIVS = [['1/16',0.25],['1/8T',1/3],['1/8',0.5],['1/4T',2/3],['1/8D',0.75],['1/4',1],['1/4D',1.5],['1/2',2],['1/1',4]];
+const NOTE = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const noteName = m => NOTE[((m % 12) + 12) % 12] + (Math.floor(m / 12) - 1);
+let sync = false;
+
+// ---------- schema: 3 pages × 8 knobs; g:1 = global (shared by all tracks) ----------
+const PAGES = ['GRAIN', 'SHAPE', 'FX'];
+const PARAMS = [
+  { id: 'start',   label: 'Position', min: 0,     max: 1,     def: 0.3,  fmt: v => (v * 100).toFixed(1) + '%' },
+  { id: 'len',     label: 'Width',    min: 0.002, max: 1,     def: 0.15, log: 1, fmt: v => (v * 100).toFixed(1) + '%' },
+  { id: 'size',    label: 'Grain',    min: 0.005, max: 0.5,   def: 0.08, log: 1, fmt: v => (v * 1000).toFixed(0) + 'ms' },
+  { id: 'density', label: 'Density',  min: 1,     max: 150,   def: 25,   log: 1, fmt: v => sync ? DIVS[divIdx(T())][0] : v.toFixed(1) + '/s' },
+  { id: 'speed',   label: 'Scan',     min: -2,    max: 2,     def: 1,    fmt: v => { if (!sync) return (v >= 0 ? '+' : '') + v.toFixed(2) + 'x'; const L = loopBeats(T()); return L ? (L < 0 ? '◀ ' : '') + Math.abs(L) + ' beats' : 'freeze'; } },
+  { id: 'spread',  label: 'Spread',   min: 0,     max: 1,     def: 0.02, fmt: v => (v * 100).toFixed(0) + '%' },
+  { id: 'release', label: 'Release',  min: 0.01,  max: 8,     def: 0.8,  log: 1, fmt: v => v.toFixed(2) + 's' },
+  { id: 'gain',    label: 'Volume',   min: 0,     max: 1,     def: 0.7,  fmt: v => (v * 100).toFixed(0) + '%' },
+  { id: 'attack',  label: 'Attack',   min: 0.002, max: 4,     def: 0.02, log: 1, fmt: v => v.toFixed(3) + 's' },
+  { id: 'jitter',  label: 'Pitch jit',min: 0,     max: 12,    def: 0,    fmt: v => v.toFixed(2) + 'st' },
+  { id: 'reverse', label: 'Reverse',  min: 0,     max: 1,     def: 0,    fmt: v => (v * 100).toFixed(0) + '%' },
+  { id: 'width',   label: 'Stereo',   min: 0,     max: 1,     def: 0.5,  fmt: v => (v * 100).toFixed(0) + '%' },
+  { id: 'root',    label: 'Root',     min: 24,    max: 96,    def: 60,   step: 1, fmt: v => noteName(v) },
+  { id: 'hpf',     label: 'Low cut',  min: 20,    max: 2000,  def: 20,   log: 1, fmt: v => v < 21 ? 'off' : v.toFixed(0) + 'Hz' },
+  { id: 'lpf',     label: 'High cut', min: 200,   max: 20000, def: 20000,log: 1, fmt: v => v > 19900 ? 'off' : (v / 1000).toFixed(1) + 'k' },
+  { id: 'bpm',     label: 'BPM',      g: 1, min: 40, max: 240, def: 120, step: 0.1, fmt: v => v.toFixed(1) },
+  { id: 'dtime',   label: 'Delay',    g: 1, min: 0.02, max: 2, def: 0.375, log: 1, fmt: v => sync ? DDIVS[ddivIdx()][0] : (v * 1000).toFixed(0) + 'ms' },
+  { id: 'dfb',     label: 'Feedback', g: 1, min: 0, max: 0.95, def: 0.4, fmt: v => (v * 100).toFixed(0) + '%' },
+  { id: 'dtone',   label: 'Dly tone', g: 1, min: 300, max: 16000, def: 4000, log: 1, fmt: v => (v / 1000).toFixed(1) + 'k' },
+  { id: 'dmix',    label: 'Delay snd',min: 0,     max: 1,     def: 0,    fmt: v => (v * 100).toFixed(0) + '%' },
+  { id: 'rsize',   label: 'Rev size', g: 1, min: 0.2, max: 10, def: 2.5, log: 1, fmt: v => v.toFixed(1) + 's' },
+  { id: 'rdamp',   label: 'Rev damp', g: 1, min: 0, max: 1, def: 0.5, fmt: v => (v * 100).toFixed(0) + '%' },
+  { id: 'rmix',    label: 'Rev snd',  min: 0,     max: 1,     def: 0.2,  fmt: v => (v * 100).toFixed(0) + '%' },
+  { id: 'out',     label: 'Master',   g: 1, min: 0, max: 1.2, def: 0.9, fmt: v => (v * 100).toFixed(0) + '%' },
+];
+PARAMS.forEach((p, i) => { p.page = Math.floor(i / 8); p.slot = i % 8; });
+const PM = Object.fromEntries(PARAMS.map(p => [p.id, p]));
+const TDEF = Object.fromEntries(PARAMS.filter(p => !p.g).map(p => [p.id, p.def]));
+const GDEF = Object.fromEntries(PARAMS.filter(p => p.g).map(p => [p.id, p.def]));
+const G = { ...GDEF };
+const BEND_RANGE = 2, MAX_REC = 30, PAD_BASE = 36;
+
+// ---------- tracks ----------
+const tracks = Array.from({ length: NT }, (_, i) => ({
+  i, P: { ...TDEF }, sample: null, peaks: null, node: null, hp: null, lp: null, dSend: null, rSend: null,
+  viz: { g: new Float32Array(0), v: new Float32Array(0) }, playing: false,
+}));
+let cur = 0;
+const T = () => tracks[cur];
+const val = (id, t = T()) => PM[id].g ? G[id] : t.P[id];
+function store(id, v, t = T()) { if (PM[id].g) G[id] = v; else t.P[id] = v; }
+
+function toNorm(p, v, t = T()) {
+  if (p.id === 'start') return t.P.len >= 1 ? 0 : v / (1 - t.P.len);
+  return p.log ? Math.log(v / p.min) / Math.log(p.max / p.min) : (v - p.min) / (p.max - p.min);
+}
+function fromNorm(p, n, t = T()) {
+  n = Math.min(1, Math.max(0, n));
+  if (p.id === 'start') return n * (1 - t.P.len);
+  return p.log ? p.min * Math.pow(p.max / p.min, n) : p.min + n * (p.max - p.min);
+}
+const divIdx = t => Math.round(toNorm(PM.density, t.P.density, t) * (DIVS.length - 1));
+const ddivIdx = () => Math.round(toNorm(PM.dtime, G.dtime) * (DDIVS.length - 1));
+function loopBeats(t) {
+  const s = t.P.speed; if (Math.abs(s) < 0.06) return 0;
+  return Math.sign(s) * LOOPS[Math.round((Math.abs(s) - 0.06) / 1.94 * (LOOPS.length - 1))];
+}
+const delaySeconds = () => sync ? Math.min(6, DDIVS[ddivIdx()][1] * 60 / G.bpm) : G.dtime;
+
+// ---------- state ----------
+let ctx, stream, streamDev = null, recNode, fx = null;
+let recording = false, recTrack = 0, recChunks = [], recPeaks = [], recT0 = 0;
+let hold = false, octave = 0, page = 0, stopHeld = false, bend = 0;
+let origin = 0, tempoSrc = 'manual', taps = [], clk = [], clkTicks = 0, clkBeats = 0;
+const down = new Set(), held = new Set(), noteTrack = new Map();
+let midiNames = [], lastMsg = '—';
+const $ = id => document.getElementById(id);
+const sendT = (t, m) => t.node && t.node.port.postMessage(m);
+
+// track-switch button: ◀▶ by default, plus one learnable button (e.g. EDIT)
+const LEARN_KEY = 'collidoscope.multi.trackbtn';
+let trackBtn = (() => { try { return JSON.parse(localStorage.getItem(LEARN_KEY)); } catch (e) { return null; } })();
+let learning = false;
+
+// ---------- UI ----------
+const ui = {};
+PAGES.forEach((name, pi) => {
+  const grp = document.createElement('div'); grp.className = 'group'; grp.id = 'g' + pi;
+  grp.innerHTML = `<div class="gt">${pi + 1} ${name}</div>`;
+  grp.querySelector('.gt').onclick = () => setPage(pi);
+  for (const p of PARAMS.filter(p => p.page === pi)) {
+    const d = document.createElement('div'); d.className = 'ctl' + (p.g ? ' glob' : '');
+    d.title = p.g ? 'shared by all tracks' : 'per track';
+    d.innerHTML = `<label><span>${p.label} <i></i></span><span class="v"></span></label><input type="range" min="0" max="1" step="0.001">`;
+    const inp = d.querySelector('input');
+    inp.addEventListener('input', () => { setParam(p.id, fromNorm(p, +inp.value)); lockSlotOf(p.id); });
+    inp.addEventListener('keydown', e => e.stopPropagation());
+    ui[p.id] = { d, inp, val: d.querySelector('.v'), tag: d.querySelector('i') };
+    grp.appendChild(d);
+  }
+  $('groups').appendChild(grp);
+});
+for (let i = 0; i < NT; i++) {
+  const b = document.createElement('button'); b.className = 'tbtn'; b.textContent = 'T' + (i + 1);
+  b.style.setProperty('--tc', `rgb(${TCOL[i]})`); b.onclick = () => setTrack(i);
+  $('tracksel').appendChild(b);
+}
+function updateUI(id) {
+  const p = PM[id], u = ui[id];
+  u.inp.value = toNorm(p, val(id));
+  const t = takeover[p.slot];
+  const locked = p.page === page && t.locked && t.ghost != null;
+  u.d.classList.toggle('locked', locked);
+  u.val.textContent = p.fmt(val(id)) + (locked ? ` ⇢${Math.round(t.ghost * 100)}` : '');
+}
+const updateAll = () => PARAMS.forEach(p => updateUI(p.id));
+function renderTrackUI() {
+  document.querySelectorAll('.tbtn').forEach((b, i) => {
+    b.classList.toggle('on', i === cur);
+    b.classList.toggle('play', tracks[i].playing);
+  });
+  document.documentElement.style.setProperty('--acc', `rgb(${TCOL[cur]})`);
+  $('bPlay').classList.toggle('on', T().playing);
+  $('bLearn').textContent = learning ? 'press a controller button…' : 'Learn ⇄' + (trackBtn ? ` (${trackBtn.type === 'cc' ? 'CC' + trackBtn.num : 'note ' + trackBtn.num})` : '');
+  $('bLearn').classList.toggle('on', learning);
+}
+
+// ---------- params ----------
+function setParam(id, v, t = T()) {
+  const p = PM[id];
+  v = Math.min(p.max, Math.max(p.min, v));
+  if (p.step) v = Math.round(v / p.step) * p.step;
+  if (id === 'speed' && Math.abs(v) < 0.06) v = 0;
+  store(id, v, t);
+  if (id === 'len' && t.P.start > 1 - v) t.P.start = Math.max(0, 1 - v);
+  if (id === 'start' && v > 1 - t.P.len) t.P.start = 1 - t.P.len;
+  if (t === T()) {
+    updateUI(id);
+    if (id === 'len' || id === 'start') { updateUI('start'); updateUI('len'); }
+    if (id === 'bpm') { updateUI('density'); updateUI('speed'); updateUI('dtime'); }
+  }
+  applyFx(id, t);
+  if (p.g) tracks.forEach(pushParams); else pushParams(t);
+}
+function syncDerived(t) {
+  if (!ctx || !sync) return { sync: false };
+  const beat = 60 / G.bpm * ctx.sampleRate;
+  return { sync: true, period: beat / DIVS[divIdx(t)][1], loop: loopBeats(t) * beat, origin };
+}
+const pushParams = t => sendT(t, { type: 'param', values: { ...t.P, bend: t === T() ? bend : 0, ...syncDerived(t) } });
+const pushAll = () => tracks.forEach(pushParams);
+function setSync(b) {
+  sync = b; $('bSync').classList.toggle('on', b);
+  if (b && ctx) origin = Math.round(ctx.currentTime * ctx.sampleRate);
+  applyFx('dtime'); updateAll(); pushAll();
+}
+function setTrack(i) {
+  i = ((i % NT) + NT) % NT;
+  if (i === cur) return;
+  if (bend) { bend = 0; pushParams(T()); }
+  cur = i; lockAll(); updateAll(); renderTrackUI();
+  lastMsg = `track ${cur + 1}` + (T().sample ? '' : ' (empty — R to record, or drop a file on its lane)');
+}
+
+// ---------- knob pages + value-scaling catch-up ----------
+const takeover = Array.from({ length: 8 }, () => ({ locked: false, last: null, ghost: null, val: 0 }));
+function lockAll() { takeover.forEach(t => { t.locked = true; t.last = null; t.ghost = null; }); }
+function lockSlotOf(id) { const p = PM[id]; if (p.page === page) { const t = takeover[p.slot]; t.locked = true; t.last = null; t.ghost = null; } }
+function setPage(n) {
+  page = ((n % PAGES.length) + PAGES.length) % PAGES.length;
+  PAGES.forEach((_, i) => $('g' + i).classList.toggle('active', i === page));
+  PARAMS.forEach(p => ui[p.id].tag.textContent = p.page === page ? 'K' + (p.slot + 1) : '');
+  lockAll(); updateAll();
+  lastMsg = `knob page ${page + 1}: ${PAGES[page]}`;
+}
+function knob(slot, value127) {
+  const p = PARAMS.find(q => q.page === page && q.slot === slot); if (!p) return;
+  const norm = value127 / 127, t = takeover[slot];
+  if (!t.locked) { setParam(p.id, fromNorm(p, norm)); return; }
+  if (t.last == null) t.val = toNorm(p, val(p.id));
+  if (Math.abs(norm - t.val) < 0.02) { t.locked = false; t.ghost = null; setParam(p.id, fromNorm(p, norm)); return; }
+  if (t.last != null) {
+    if (norm > t.last && t.last < 1) t.val += (norm - t.last) * (1 - t.val) / (1 - t.last);
+    else if (norm < t.last && t.last > 0) t.val -= (t.last - norm) * t.val / t.last;
+    t.val = Math.min(1, Math.max(0, t.val));
+  }
+  t.last = norm; t.ghost = norm;
+  if (Math.abs(norm - t.val) < 0.02) { t.locked = false; t.ghost = null; t.val = norm; }
+  setParam(p.id, fromNorm(p, t.val));
+}
+
+// ---------- scenes (presets: all tracks + shared settings; samples not included) ----------
+const LS = 'collidoscope.multi.presets.v1';
+let presets = (() => { try { return JSON.parse(localStorage.getItem(LS)) || []; } catch (e) { return []; } })();
+let curSlot = null;
+function renderSlots() {
+  $('slots').innerHTML = '';
+  for (let i = 0; i < 8; i++) {
+    const b = document.createElement('button'); b.className = 'slot' + (presets[i] ? ' full' : '') + (curSlot === i ? ' cur' : '');
+    b.textContent = i + 1; b.title = 'click = load · shift+click = save';
+    b.onclick = e => e.shiftKey ? savePreset(i) : loadPreset(i);
+    $('slots').appendChild(b);
+  }
+}
+function applyScene(sc) {
+  sync = !!sc.sync; $('bSync').classList.toggle('on', sync);
+  for (const p of PARAMS.filter(p => p.g)) if (sc.G && sc.G[p.id] != null) G[p.id] = sc.G[p.id];
+  tracks.forEach((t, i) => {
+    const src = sc.tracks ? sc.tracks[i] : TDEF;
+    for (const p of PARAMS.filter(p => !p.g)) if (src && src[p.id] != null) t.P[p.id] = Math.min(p.max, Math.max(p.min, src[p.id]));
+    t.P.start = Math.min(t.P.start, 1 - t.P.len);
+    PARAMS.forEach(p => applyFx(p.id, t));
+  });
+  lockAll(); updateAll(); pushAll();
+}
+function savePreset(i) {
+  presets[i] = { G: { ...G }, tracks: tracks.map(t => ({ ...t.P })), sync };
+  try { localStorage.setItem(LS, JSON.stringify(presets)); } catch (e) { }
+  curSlot = i; lastMsg = `saved scene ${i + 1}`; renderSlots();
+}
+function loadPreset(i) {
+  if (!presets[i]) { lastMsg = `scene ${i + 1} is empty (shift+click / ⏹+pad to save)`; return; }
+  applyScene(presets[i]); curSlot = i; lastMsg = `scene ${i + 1}`; renderSlots();
+}
+function resetTrack() {   // resets the current track's settings only
+  Object.assign(T().P, TDEF); PARAMS.forEach(p => applyFx(p.id, T()));
+  lockAll(); updateAll(); pushParams(T()); lastMsg = `track ${cur + 1} reset`;
+}
+
+// ---------- audio init + routing ----------
+async function initAudio() {
+  if (ctx) return;
+  ctx = new AudioContext({ latencyHint: 'interactive' });
+  const url = URL.createObjectURL(new Blob([$('worklet-src').textContent], { type: 'application/javascript' }));
+  await ctx.audioWorklet.addModule(url);
+
+  // shared: master → limiter → out ; shared delay + reverb buses
+  const master = new GainNode(ctx, { gain: G.out });
+  const lim = new DynamicsCompressorNode(ctx, { threshold: -3, knee: 0, ratio: 20, attack: 0.003, release: 0.1 });
+  master.connect(lim).connect(ctx.destination);
+  const dBus = new GainNode(ctx), delay = new DelayNode(ctx, { maxDelayTime: 6, delayTime: G.dtime });
+  const tone = new BiquadFilterNode(ctx, { type: 'lowpass', frequency: G.dtone }), fb = new GainNode(ctx, { gain: G.dfb });
+  const rBus = new GainNode(ctx);
+  dBus.connect(delay).connect(tone).connect(fb).connect(delay);
+  tone.connect(master); tone.connect(rBus);
+  fx = { master, delay, tone, fb, rBus, rev: null, revT: 0 };
+  updateReverb(true);
+
+  // per track: granular → low cut → high cut → master, with delay/reverb sends
+  for (const t of tracks) {
+    t.node = new AudioWorkletNode(ctx, 'granular', { numberOfInputs: 0, outputChannelCount: [2] });
+    t.node.port.onmessage = e => { if (e.data.type === 'viz') t.viz = e.data; };
+    t.hp = new BiquadFilterNode(ctx, { type: 'highpass', frequency: t.P.hpf, Q: 0.7 });
+    t.lp = new BiquadFilterNode(ctx, { type: 'lowpass', frequency: t.P.lpf, Q: 0.7 });
+    t.dSend = new GainNode(ctx, { gain: t.P.dmix }); t.rSend = new GainNode(ctx, { gain: t.P.rmix });
+    t.node.connect(t.hp).connect(t.lp).connect(master);
+    t.lp.connect(t.dSend).connect(dBus);
+    t.lp.connect(t.rSend).connect(rBus);
+    pushParams(t);
+  }
+
+  recNode = new AudioWorkletNode(ctx, 'recorder', { numberOfOutputs: 1, outputChannelCount: [1] });
+  recNode.connect(new GainNode(ctx, { gain: 0 })).connect(ctx.destination);
+  recNode.port.onmessage = e => onRecChunk(e.data);
+
+  await ctx.resume();
+  setSample(tracks[0], makeDemo(ctx.sampleRate));
+  initMidi(); listInputs();
+}
+$('start').addEventListener('click', () => { $('start').remove(); initAudio(); });
+
+function applyFx(id, t = T()) {
+  if (!fx) return;
+  const now = ctx.currentTime, K = 0.02;
+  switch (id) {
+    case 'hpf': t.hp.frequency.setTargetAtTime(t.P.hpf, now, K); break;
+    case 'lpf': t.lp.frequency.setTargetAtTime(t.P.lpf, now, K); break;
+    case 'dmix': t.dSend.gain.setTargetAtTime(t.P.dmix, now, K); break;
+    case 'rmix': t.rSend.gain.setTargetAtTime(t.P.rmix, now, K); break;
+    case 'dtime': case 'bpm': fx.delay.delayTime.setTargetAtTime(delaySeconds(), now, 0.06); break;
+    case 'dfb': fx.fb.gain.setTargetAtTime(G.dfb, now, K); break;
+    case 'dtone': fx.tone.frequency.setTargetAtTime(G.dtone, now, K); break;
+    case 'out': fx.master.gain.setTargetAtTime(G.out, now, K); break;
+    case 'rsize': case 'rdamp': updateReverb(); break;
+  }
+}
+function makeIR(size, damp) {
+  const sr = ctx.sampleRate, n = Math.max(1, Math.floor(sr * size)), b = ctx.createBuffer(2, n, sr);
+  for (let c = 0; c < 2; c++) {
+    const d = b.getChannelData(c); let y = 0;
+    for (let i = 0; i < n; i++) {
+      const t = i / n, a = 1 - 0.985 * damp * Math.min(1, t * 1.5);
+      y += a * ((Math.random() * 2 - 1) - y);
+      d[i] = y * Math.exp(-6.9 * t) * Math.min(1, i / (sr * 0.004));
+    }
+  }
+  return b;
+}
+function updateReverb(now) {
+  clearTimeout(fx.revT);
+  fx.revT = setTimeout(() => {
+    const t = ctx.currentTime, conv = new ConvolverNode(ctx), g = new GainNode(ctx, { gain: 0 });
+    conv.buffer = makeIR(G.rsize, G.rdamp);
+    fx.rBus.connect(conv).connect(g).connect(fx.master);
+    g.gain.setTargetAtTime(1, t, 0.06);
+    const old = fx.rev;
+    if (old) { old.g.gain.setTargetAtTime(0, t, 0.06); setTimeout(() => { old.c.disconnect(); old.g.disconnect(); }, 600); }
+    fx.rev = { c: conv, g };
+  }, now ? 0 : 150);
+}
+
+// ---------- samples ----------
+function normalize(d) {
+  let m = 0; for (let i = 0; i < d.length; i++) m = Math.max(m, Math.abs(d[i]));
+  if (m > 1e-4) { const k = 0.9 / m; for (let i = 0; i < d.length; i++) d[i] *= k; }
+  return d;
+}
+function setSample(t, data) { t.sample = data; sendT(t, { type: 'buffer', data: data.slice() }); computePeaks(t); }
+function computePeaks(t) {
+  if (!t.sample) return;
+  const cols = Math.max(1, Math.floor(innerWidth)), n = t.sample.length, s = t.sample;
+  t.peaks = new Float32Array(cols * 2);
+  for (let c = 0; c < cols; c++) {
+    const a = Math.floor(c * n / cols), b = Math.max(a + 1, Math.floor((c + 1) * n / cols));
+    let mn = 1, mx = -1;
+    for (let i = a; i < b && i < n; i++) { if (s[i] < mn) mn = s[i]; if (s[i] > mx) mx = s[i]; }
+    t.peaks[c * 2] = mn; t.peaks[c * 2 + 1] = mx;
+  }
+}
+async function loadFile(f, t = T()) {
+  await initAudio();
+  const ab = await ctx.decodeAudioData(await f.arrayBuffer());
+  const n = ab.length, d = new Float32Array(n);
+  for (let c = 0; c < ab.numberOfChannels; c++) { const ch = ab.getChannelData(c); for (let i = 0; i < n; i++) d[i] += ch[i] / ab.numberOfChannels; }
+  setSample(t, normalize(d)); lastMsg = `T${t.i + 1}: loaded ${f.name}`;
+}
+function makeDemo(sr) {
+  const n = sr * 6, d = new Float32Array(n);
+  [57, 60, 64, 67, 69, 72, 76, 79, 74, 71, 67, 64].forEach((m, i) => {
+    const f = 440 * 2 ** ((m - 69) / 12), N = Math.round(sr / f);
+    const ring = Float32Array.from({ length: N }, () => Math.random() * 2 - 1);
+    const st = Math.round(i * 0.42 * sr), L = Math.min(n - st, sr * 2.5);
+    for (let k = 0, idx = 0; k < L; k++) { const a = ring[idx], b = ring[(idx + 1) % N]; ring[idx] = 0.996 * 0.5 * (a + b); d[st + k] += a * 0.5; idx = (idx + 1) % N; }
+  });
+  for (let k = 0; k < n; k++) {
+    const t = k / sr, e = Math.sin(Math.PI * t / 6) ** 2;
+    d[k] += 0.12 * e * (Math.sin(2 * Math.PI * 110 * t + 0.3 * Math.sin(2 * Math.PI * 5 * t)) + 0.5 * Math.sin(2 * Math.PI * 165.3 * t) + 0.3 * Math.sin(2 * Math.PI * 220.7 * t));
+  }
+  return normalize(d);
+}
+function detectRoot() {
+  const t = T(), sample = t.sample;
+  if (!sample || !ctx) return;
+  const sr = ctx.sampleRate, a = Math.floor(t.P.start * sample.length), b = Math.floor((t.P.start + t.P.len) * sample.length);
+  const N = Math.min(8192, b - a);
+  if (N < 2048) { lastMsg = 'selection too short to detect pitch (widen it)'; return; }
+  const x = sample.subarray(a + ((b - a - N) >> 1), a + ((b - a - N) >> 1) + N);
+  const minLag = Math.floor(sr / 1500), maxLag = Math.min(Math.floor(sr / 40), N >> 1);
+  const r = new Float32Array(maxLag + 2);
+  for (let L = minLag; L <= maxLag + 1; L++) {
+    let ac = 0, m = 0; const M = N - L;
+    for (let i = 0; i < M; i++) { ac += x[i] * x[i + L]; m += x[i] * x[i] + x[i + L] * x[i + L]; }
+    r[L] = m > 0 ? 2 * ac / m : 0;
+  }
+  let best = 0; for (let L = minLag; L <= maxLag; L++) best = Math.max(best, r[L]);
+  if (best < 0.5) { lastMsg = 'no clear pitch in selection'; return; }
+  let lag = -1;
+  for (let L = minLag + 1; L <= maxLag; L++) if (r[L] >= 0.9 * best && r[L] >= r[L - 1] && r[L] >= r[L + 1]) { lag = L; break; }
+  if (lag < 0) return;
+  const y0 = r[lag - 1], y1 = r[lag], y2 = r[lag + 1], den = y0 - 2 * y1 + y2;
+  const f = sr / (lag + (den ? 0.5 * (y0 - y2) / den : 0)), midi = 69 + 12 * Math.log2(f / 440);
+  setParam('root', Math.round(midi)); lockSlotOf('root');
+  const cents = Math.round((midi - Math.round(midi)) * 100);
+  lastMsg = `T${cur + 1}: ${f.toFixed(1)} Hz → root ${noteName(Math.round(midi))} (${cents >= 0 ? '+' : ''}${cents}¢)`;
+}
+
+// ---------- tempo ----------
+function tap() {
+  if (!ctx) return;
+  const t = ctx.currentTime;
+  if (taps.length && t - taps[taps.length - 1] > 2) taps = [];
+  taps.push(t); if (taps.length > 5) taps.shift();
+  if (taps.length >= 2) setParam('bpm', 60 * (taps.length - 1) / (taps[taps.length - 1] - taps[0]));
+  origin = Math.round(t * ctx.sampleRate); tempoSrc = 'tap'; pushAll();
+}
+function onClock(e) {
+  if (!ctx) return;
+  clk.push(e.timeStamp); if (clk.length > 49) clk.shift();
+  if (clk.length >= 25) {
+    const bpm = 60000 / ((clk[clk.length - 1] - clk[0]) / (clk.length - 1) * 24);
+    if (Math.abs(bpm - G.bpm) > 0.3 && bpm > 30 && bpm < 300) setParam('bpm', bpm);
+  }
+  tempoSrc = 'MIDI clock';
+  if (++clkTicks % 24 === 0) { clkBeats++; origin = Math.round(ctx.currentTime * ctx.sampleRate - clkBeats * 60 / G.bpm * ctx.sampleRate); pushAll(); }
+}
+
+// ---------- recording (into the current track) ----------
+async function listInputs() {
+  try {
+    const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput');
+    const sel = $('selIn'), c = sel.value;
+    sel.innerHTML = '<option value="">default input</option>' + devs.filter(d => d.deviceId && d.deviceId !== 'default')
+      .map(d => `<option value="${d.deviceId}">${d.label || 'input ' + d.deviceId.slice(0, 6)}</option>`).join('');
+    sel.value = c;
+  } catch (e) { }
+}
+async function startRec() {
+  await initAudio();
+  const dev = $('selIn').value || null;
+  if (!stream || streamDev !== dev) {
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    stream = await navigator.mediaDevices.getUserMedia({ audio: {
+      deviceId: dev ? { exact: dev } : undefined, echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: { ideal: 2 } } });
+    streamDev = dev;
+    ctx.createMediaStreamSource(stream).connect(recNode);
+    listInputs();
+  }
+  recTrack = cur; recChunks = []; recPeaks = []; recT0 = ctx.currentTime; recording = true;
+  recNode.port.postMessage(true); $('bRec').classList.add('on');
+}
+function onRecChunk(c) {
+  if (!recording) return;
+  recChunks.push(c);
+  let mn = 1, mx = -1; for (let i = 0; i < c.length; i++) { if (c[i] < mn) mn = c[i]; if (c[i] > mx) mx = c[i]; }
+  recPeaks.push(mn, mx);
+  if (ctx.currentTime - recT0 > MAX_REC) stopRec();
+}
+function stopRec() {
+  if (!recording) return;
+  recording = false; recNode.port.postMessage(false); $('bRec').classList.remove('on');
+  const n = recChunks.reduce((a, c) => a + c.length, 0);
+  if (n < ctx.sampleRate * 0.05) { lastMsg = 'recording too short'; return; }
+  const d = new Float32Array(n); let o = 0; for (const c of recChunks) { d.set(c, o); o += c.length; }
+  setSample(tracks[recTrack], normalize(d)); lastMsg = `T${recTrack + 1}: recorded ${(n / ctx.sampleRate).toFixed(1)}s`;
+}
+const toggleRec = () => recording ? stopRec() : startRec().catch(e => { lastMsg = 'mic error: ' + e.message; });
+
+// ---------- notes (keys go to the current track; a held note stays on the track it started on) ----------
+function noteOn(note, vel) {
+  if (!ctx) return;
+  const prev = noteTrack.get(note);
+  if (prev != null && prev !== cur) sendT(tracks[prev], { type: 'off', note });
+  down.add(note); held.delete(note); noteTrack.set(note, cur);
+  sendT(T(), { type: 'on', note, vel });
+}
+function noteOff(note) {
+  down.delete(note);
+  if (hold) { held.add(note); return; }
+  const t = tracks[noteTrack.get(note) ?? cur]; noteTrack.delete(note);
+  sendT(t, { type: 'off', note });
+}
+function setHold(b) {
+  hold = b; $('bHold').classList.toggle('on', b);
+  if (!b) {
+    for (const n of held) if (!down.has(n)) { sendT(tracks[noteTrack.get(n) ?? cur], { type: 'off', note: n }); noteTrack.delete(n); }
+    held.clear();
+  }
+}
+// ▶ Play: latched voice at the original pitch, on the current track only
+function setPlaying(t, b) {
+  if (!ctx || t.playing === b) return;
+  t.playing = b;
+  if (b) { setHold(true); sendT(t, { type: 'on', note: -1, vel: 0.9 }); }
+  else { sendT(t, { type: 'off', note: -1 }); if (!tracks.some(x => x.playing)) setHold(false); }
+  renderTrackUI();
+}
+const togglePlay = () => setPlaying(T(), !T().playing);
+function panic() {   // stops everything, on every track
+  down.clear(); held.clear(); noteTrack.clear();
+  tracks.forEach(t => { t.playing = false; sendT(t, { type: 'panic' }); });
+  setHold(false); renderTrackUI();
+}
+
+// ---------- MIDI ----------
+async function initMidi() {
+  if (!navigator.requestMIDIAccess) { midiNames = ['Web MIDI not available — use Chrome']; return; }
+  try {
+    const acc = await navigator.requestMIDIAccess();
+    const bind = () => { midiNames = []; for (const i of acc.inputs.values()) { i.onmidimessage = onMidi; midiNames.push(i.name); } };
+    bind(); acc.onstatechange = bind;
+  } catch (e) { midiNames = ['MIDI blocked: ' + e.message]; }
+}
+const ccPrev = {};
+function onMidi(e) {
+  const s = e.data[0];
+  if (s >= 0xF0) {
+    if (s === 0xF8) onClock(e);
+    else if (s === 0xFA) { clkTicks = 0; clkBeats = 0; if (ctx) origin = Math.round(ctx.currentTime * ctx.sampleRate); pushAll(); }
+    return;
+  }
+  const d1 = e.data[1], d2 = e.data[2] || 0, t = s & 0xf0, ch = (s & 0x0f) + 1;
+  // learn mode: the next button pressed becomes the "next track" button
+  if (learning && ((t === 0xB0 && d2 > 0) || (t === 0x90 && d2 > 0))) {
+    trackBtn = t === 0xB0 ? { type: 'cc', num: d1 } : { type: 'note', num: d1, ch };
+    try { localStorage.setItem(LEARN_KEY, JSON.stringify(trackBtn)); } catch (err) { }
+    learning = false; lastMsg = `track button = ${trackBtn.type === 'cc' ? 'CC ' + d1 : 'note ' + d1 + ' ch' + ch}`; renderTrackUI();
+    ccPrev[d1] = d2; return;
+  }
+  if (trackBtn) {
+    if (trackBtn.type === 'cc' && t === 0xB0 && d1 === trackBtn.num) { const r = d2 >= 64 && !(ccPrev[d1] >= 64); ccPrev[d1] = d2; if (r) setTrack(cur + 1); return; }
+    if (trackBtn.type === 'note' && (t === 0x90 || t === 0x80) && d1 === trackBtn.num && ch === trackBtn.ch) { if (t === 0x90 && d2 > 0) setTrack(cur + 1); return; }
+  }
+  if (t === 0x90 && d2 > 0) {
+    lastMsg = `note ${d1} v${d2} ch${ch}`;
+    if (ch === 10) { const i = d1 - PAD_BASE; if (i >= 0 && i < 8) stopHeld ? savePreset(i) : loadPreset(i); return; }
+    noteOn(d1, d2 / 127);
+  } else if (t === 0x80 || t === 0x90) { if (ch !== 10) noteOff(d1); }
+  else if (t === 0xE0) {
+    bend = ((d1 | (d2 << 7)) - 8192) / 8192 * BEND_RANGE;
+    sendT(T(), { type: 'param', values: { bend } }); lastMsg = `bend ${bend.toFixed(2)}st`;
+  } else if (t === 0xB0) {
+    lastMsg = `CC ${d1}=${d2} ch${ch}`;
+    const rising = d2 >= 64 && !(ccPrev[d1] >= 64); ccPrev[d1] = d2;
+    if (d1 >= 1 && d1 <= 8) knob(d1 - 1, d2);
+    else if (d1 === 64) { if (rising) setHold(!hold); }
+    else if (d1 === 16) { stopHeld = d2 >= 64; if (rising) panic(); }   // ⏹ stops all tracks
+    else if (rising) switch (d1) {
+      case 17: togglePlay(); break;          // ⏵ play current track at original pitch
+      case 18: toggleRec(); break;           // ⏺ record into current track
+      case 19: setPage(page - 1); break;     // ▲ knob row up
+      case 20: setPage(page + 1); break;     // ▼ knob row down
+      case 21: setTrack(cur + 1); break;     // ▶ next track
+      case 22: setTrack(cur - 1); break;     // ◀ previous track
+      case 23: tap(); break;                 // ● tap tempo
+    }
+  }
+}
+
+// ---------- computer keyboard ----------
+const KEYMAP = 'awsedftgyhujkolp;';
+const keyNotes = {};
+addEventListener('keydown', async e => {
+  if (e.metaKey || e.ctrlKey) return;
+  if ($('start')) { $('start').remove(); await initAudio(); }
+  if (e.repeat) return;
+  const k = e.key.toLowerCase();
+  if (/^Digit[1-8]$/.test(e.code)) { const i = +e.code[5] - 1; e.shiftKey ? savePreset(i) : loadPreset(i); return; }
+  if (e.code === 'Digit0') { resetTrack(); return; }
+  if (e.key === 'Tab') { e.preventDefault(); setTrack(cur + (e.shiftKey ? -1 : 1)); return; }
+  const i = KEYMAP.indexOf(k);
+  if (i >= 0) { const n = 60 + octave + i; keyNotes[k] = n; noteOn(n, 0.8); return; }
+  switch (k) {
+    case 'z': octave = Math.max(-36, octave - 12); break;
+    case 'x': octave = Math.min(36, octave + 12); break;
+    case 'r': toggleRec(); break;
+    case 'b': tap(); break;
+    case 'n': setSync(!sync); break;
+    case '[': setPage(page - 1); break;
+    case ']': setPage(page + 1); break;
+    case ' ': e.preventDefault(); setHold(!hold); break;
+    case 'escape': panic(); break;
+    case 'enter': togglePlay(); break;
+    case 'h': $('panel').classList.toggle('hidden'); $('help').classList.toggle('hidden'); break;
+    case 'f': toggleFull(); break;
+  }
+});
+addEventListener('keyup', e => { const k = e.key.toLowerCase(); if (keyNotes[k] != null) { noteOff(keyNotes[k]); delete keyNotes[k]; } });
+
+// ---------- buttons, file, drop ----------
+const toggleFull = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+$('bDemo').onclick = async () => { await initAudio(); setSample(T(), makeDemo(ctx.sampleRate)); };
+$('bLoad').onclick = () => $('file').click();
+$('file').onchange = e => e.target.files[0] && loadFile(e.target.files[0]);
+$('bRec').onclick = toggleRec;
+$('bDetect').onclick = detectRoot;
+$('bSync').onclick = () => setSync(!sync);
+$('bTap').onclick = tap;
+$('bPlay').onclick = togglePlay;
+$('bHold').onclick = () => setHold(!hold);
+$('bPanic').onclick = panic;
+$('bReset').onclick = resetTrack;
+$('bLearn').onclick = () => { learning = !learning; renderTrackUI(); };
+$('bFull').onclick = toggleFull;
+$('selIn').onchange = () => { if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; } };
+document.querySelectorAll('button,select').forEach(b => b.addEventListener('keydown', e => { if (e.key === ' ' || e.key === 'Enter' || e.key === 'Tab') e.preventDefault(); }));
+addEventListener('dragover', e => { e.preventDefault(); $('dropmsg').classList.remove('hidden'); });
+addEventListener('dragleave', () => $('dropmsg').classList.add('hidden'));
+addEventListener('drop', e => {
+  e.preventDefault(); $('dropmsg').classList.add('hidden');
+  const f = e.dataTransfer.files[0]; if (!f) return;
+  const li = laneAt(e.clientY * dpr); if (li >= 0) setTrack(li);
+  loadFile(f, T());
+});
+
+// ---------- canvas: stacked lanes ----------
+const cv = $('cv'), g = cv.getContext('2d');
+let dpr = 1;
+function resize() { dpr = devicePixelRatio || 1; cv.width = innerWidth * dpr; cv.height = innerHeight * dpr; tracks.forEach(computePeaks); }
+addEventListener('resize', resize); resize();
+function lane(i) {
+  const pan = $('panel'), hidden = pan.classList.contains('hidden');
+  const top0 = (hidden ? 40 : 125) * dpr;
+  const bot0 = hidden ? cv.height - 20 * dpr : (pan.getBoundingClientRect().top + 22) * dpr, h = (bot0 - top0) / NT;
+  return { top: top0 + i * h + 6 * dpr, bot: top0 + (i + 1) * h - 6 * dpr };
+}
+function laneAt(y) { for (let i = 0; i < NT; i++) { const l = lane(i); if (y >= l.top - 6 * dpr && y <= l.bot + 6 * dpr) return i; } return -1; }
+
+let drag = null;
+cv.addEventListener('pointerdown', e => {
+  const li = laneAt(e.clientY * dpr); if (li < 0) return;
+  if (li !== cur) setTrack(li);
+  const t = T(); if (!t.sample) return;
+  const x = e.clientX / innerWidth, x0 = t.P.start, x1 = t.P.start + t.P.len, edge = 8 / innerWidth;
+  if (Math.abs(x - x0) < edge) drag = { mode: 'l' };
+  else if (Math.abs(x - x1) < edge) drag = { mode: 'r' };
+  else if (x > x0 && x < x1) drag = { mode: 'move', off: x - x0 };
+  else drag = { mode: 'new', anchor: x };
+  cv.setPointerCapture(e.pointerId);
+});
+cv.addEventListener('pointermove', e => {
+  const x = Math.min(1, Math.max(0, e.clientX / innerWidth)), t = T();
+  if (!drag) {
+    const li = laneAt(e.clientY * dpr);
+    if (li !== cur || !t.sample) { cv.style.cursor = li >= 0 ? 'pointer' : 'default'; return; }
+    const x0 = t.P.start, x1 = t.P.start + t.P.len, edge = 8 / innerWidth;
+    cv.style.cursor = Math.abs(x - x0) < edge || Math.abs(x - x1) < edge ? 'ew-resize' : (x > x0 && x < x1 ? 'grab' : 'crosshair');
+    return;
+  }
+  const minW = PM.len.min;
+  let s = t.P.start, w = t.P.len;
+  if (drag.mode === 'move') s = Math.min(1 - w, Math.max(0, x - drag.off));
+  else if (drag.mode === 'l') { const end = s + w; s = Math.min(end - minW, x); w = end - s; }
+  else if (drag.mode === 'r') w = Math.max(minW, x - s);
+  else { s = Math.min(drag.anchor, x); w = Math.max(minW, Math.abs(x - drag.anchor)); }
+  t.P.len = Math.min(1, w); t.P.start = Math.max(0, Math.min(1 - t.P.len, s));
+  lockSlotOf('start'); lockSlotOf('len'); updateUI('start'); updateUI('len');
+  pushParams(t);
+});
+cv.addEventListener('pointerup', () => { drag = null; });
+
+function drawWave(pk, cols, W, top, bot, selA, selB, colIn, colOut) {
+  const mid = (top + bot) / 2, amp = (bot - top) / 2, cw = W / cols;
+  const inside = new Path2D(), outside = new Path2D();
+  for (let c = 0; c < cols; c++) {
+    const mn = pk[c * 2], mx = pk[c * 2 + 1];
+    if (mx < mn) continue;
+    const f = c / cols;
+    (f >= selA && f <= selB ? inside : outside).rect(c * cw, mid - mx * amp, Math.max(1, cw - 0.5 * dpr), Math.max(dpr, (mx - mn) * amp));
+  }
+  g.fillStyle = colOut; g.fill(outside);
+  g.fillStyle = colIn; g.fill(inside);
+}
+function frame() {
+  requestAnimationFrame(frame);
+  const W = cv.width, H = cv.height;
+  g.globalCompositeOperation = 'source-over';
+  g.fillStyle = '#07080c'; g.fillRect(0, 0, W, H);
+  for (const t of tracks) {
+    const { top, bot } = lane(t.i), mid = (top + bot) / 2, amp = (bot - top) / 2, c = TCOL[t.i], sel = t.i === cur;
+    g.globalCompositeOperation = 'source-over';
+    g.fillStyle = sel ? `rgba(${c},0.05)` : 'rgba(255,255,255,0.015)'; g.fillRect(0, top - 4 * dpr, W, bot - top + 8 * dpr);
+    g.fillStyle = `rgba(${c},${sel ? 1 : 0.35})`; g.fillRect(0, top - 4 * dpr, 3 * dpr, bot - top + 8 * dpr);
+    g.font = `${11 * dpr}px ui-monospace,Menlo,monospace`; g.fillStyle = `rgba(${c},${sel ? 1 : 0.5})`;
+    g.fillText(`T${t.i + 1}${t.playing ? ' ▶' : ''}`, 10 * dpr, top + 10 * dpr);
+    g.fillStyle = '#11141c'; g.fillRect(0, mid, W, dpr);
+
+    if (recording && recTrack === t.i) {
+      const cols = Math.floor(innerWidth), total = MAX_REC * ctx.sampleRate / 128, chunks = recPeaks.length / 2;
+      const pk = new Float32Array(cols * 2); for (let k = 0; k < cols; k++) { pk[k * 2] = 1; pk[k * 2 + 1] = -1; }
+      for (let i = 0; i < chunks; i++) { const k = Math.min(cols - 1, Math.floor(i / total * cols)); pk[k * 2] = Math.min(pk[k * 2], recPeaks[i * 2]); pk[k * 2 + 1] = Math.max(pk[k * 2 + 1], recPeaks[i * 2 + 1]); }
+      g.fillStyle = 'rgba(255,77,94,0.07)'; g.fillRect(0, top, W, bot - top);
+      drawWave(pk, cols, W, top, bot, 0, 1, '#ff8a95', '#ff8a95');
+      g.fillStyle = '#ff4d5e'; g.fillRect(chunks / total * W, top, 2 * dpr, bot - top);
+      continue;
+    }
+    if (!t.peaks) {
+      g.fillStyle = `rgba(${c},0.35)`; g.textAlign = 'center';
+      g.fillText(sel ? 'empty · R to record · drop a file here' : 'empty', W / 2, mid - 6 * dpr);
+      g.textAlign = 'left'; continue;
+    }
+    const x0 = t.P.start * W, x1 = (t.P.start + t.P.len) * W;
+    g.fillStyle = `rgba(${c},${sel ? 0.1 : 0.05})`; g.fillRect(x0, top - 4 * dpr, x1 - x0, bot - top + 8 * dpr);
+    drawWave(t.peaks, t.peaks.length / 2, W, top, bot, t.P.start, t.P.start + t.P.len,
+             `rgba(${c},${sel ? 0.85 : 0.45})`, sel ? '#3a4152' : '#262b37');
+    g.fillStyle = `rgba(${c},${sel ? 1 : 0.5})`;
+    g.fillRect(x0 - dpr, top - 4 * dpr, 2 * dpr, bot - top + 8 * dpr); g.fillRect(x1 - dpr, top - 4 * dpr, 2 * dpr, bot - top + 8 * dpr);
+    g.globalCompositeOperation = 'lighter';
+    const gr = t.viz.g;
+    for (let i = 0; i < gr.length; i += 2) {
+      const w = gr[i + 1]; if (w <= 0.01) continue;
+      const x = gr[i] * W, h = w * amp * 0.95;
+      g.fillStyle = `rgba(${c},${0.12 + 0.55 * w})`; g.fillRect(x - 1.5 * dpr, mid - h, 3 * dpr, 2 * h);
+      g.fillStyle = `rgba(255,255,255,${0.35 * w})`; g.beginPath(); g.arc(x, mid, (1.5 + 4 * w) * dpr, 0, Math.PI * 2); g.fill();
+    }
+    const vs = t.viz.v;
+    for (let i = 0; i < vs.length; i += 2) {
+      g.fillStyle = `rgba(255,255,255,${0.15 + 0.5 * vs[i + 1]})`;
+      g.fillRect(vs[i] * W - 0.5 * dpr, top - 4 * dpr, dpr, bot - top + 8 * dpr);
+    }
+  }
+  if (ctx) {
+    g.globalCompositeOperation = 'source-over';
+    const beats = (ctx.currentTime * ctx.sampleRate - origin) / (60 / G.bpm * ctx.sampleRate);
+    const b = ((Math.floor(beats) % 4) + 4) % 4, fr = beats - Math.floor(beats);
+    for (let i = 0; i < 4; i++) {
+      const a = i === b ? 1 - fr * 0.8 : 0.15;
+      g.fillStyle = sync ? `rgba(${TCOL[cur]},${a})` : `rgba(107,114,128,${a * 0.6})`;
+      g.beginPath(); g.arc(W / 2 + (i - 1.5) * 18 * dpr, 22 * dpr, (i === 0 ? 5 : 4) * dpr, 0, Math.PI * 2); g.fill();
+    }
+  }
+  hud();
+}
+let hudT = 0;
+function hud() {
+  const now = performance.now(); if (now - hudT < 100) return; hudT = now;
+  const lat = ctx ? ((ctx.baseLatency || 0) + (ctx.outputLatency || 0)) * 1000 : 0;
+  const t = T(), len = t.sample && ctx ? (t.sample.length / ctx.sampleRate).toFixed(2) + 's' : 'empty';
+  const grains = tracks.reduce((a, x) => a + x.viz.g.length / 2, 0);
+  $('hud').innerHTML =
+    `<b>COLLIDOSCOPE</b> · multitrack\n` +
+    `midi   <b>${midiNames.length ? midiNames.join(', ') : 'no device'}</b>\n` +
+    `last   <b>${lastMsg}</b>\n` +
+    `track  <span class="a">T${cur + 1}</span>  sample <b>${len}</b>  root <b>${noteName(t.P.root)}</b>   knobs <span class="a">page ${page + 1} · ${PAGES[page]}</span>   scene <b>${curSlot != null ? curSlot + 1 : '—'}</b>\n` +
+    `tempo  <b>${G.bpm.toFixed(1)} bpm</b> (${tempoSrc})  sync <b>${sync ? 'ON' : 'off'}</b>  hold <b>${hold ? 'ON' : 'off'}</b>  oct <b>${octave >= 0 ? '+' : ''}${octave / 12}</b>  grains <b>${grains}</b>  latency <b>${ctx ? lat.toFixed(1) + 'ms' : '—'}</b>` +
+    (recording ? `\n<span class="r">● REC → T${recTrack + 1}  ${(ctx.currentTime - recT0).toFixed(1)}s / ${MAX_REC}s</span>` : '');
+}
+setPage(0); renderSlots(); renderTrackUI(); frame();
+</script>
+</body>
+</html>
